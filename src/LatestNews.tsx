@@ -9,8 +9,9 @@ type NewsItem = {
   snippet: string;
 };
 
-const CACHE_KEY = "latestNews_cache_v4";
+const CACHE_KEY = "latestNews_cache_v3";
 const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
+
 const MIN_DATE = "2015-01-01";
 
 const POWER_TERMS = [
@@ -88,27 +89,15 @@ function saveCache(items: NewsItem[]) {
   }
 }
 
-function normalizeUrl(u: string) {
-  // de-dupe helper: strip fragments and common tracking query params
-  try {
-    const url = new URL(u);
-    url.hash = "";
-    // remove common tracking params
-    ["utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content", "fbclid", "gclid"].forEach(
-      (k) => url.searchParams.delete(k)
-    );
-    return url.toString();
-  } catch {
-    return u;
-  }
-}
-
-async function fetchRSSQuery(query: string): Promise<NewsItem[]> {
+async function fetchGoogleNewsRSS(): Promise<NewsItem[]> {
   const rss =
     "https://news.google.com/rss/search?q=" +
-    encodeURIComponent(query) +
+    encodeURIComponent(
+      "(India power sector OR India electricity OR India power demand OR India grid OR India renewable energy OR India peak demand OR India power supply OR India discom OR India transmission)"
+    ) +
     "&hl=en-IN&gl=IN&ceid=IN:en";
 
+  // ✅ AllOrigins proxy (browser-safe on Vercel)
   const proxy = `https://api.allorigins.win/raw?url=${encodeURIComponent(rss)}`;
 
   const res = await fetch(proxy);
@@ -124,58 +113,25 @@ async function fetchRSSQuery(query: string): Promise<NewsItem[]> {
       const link = item.querySelector("link")?.textContent?.trim() || "";
       const pubDate = item.querySelector("pubDate")?.textContent?.trim() || "";
       const source = item.querySelector("source")?.textContent?.trim() || "Google News";
-      const desc = (item.querySelector("description")?.textContent || "").replace(/<[^>]+>/g, "");
+
+      const desc = (
+        item.querySelector("description")?.textContent || ""
+      ).replace(/<[^>]+>/g, "");
 
       const publishedAtISO = pubDate ? new Date(pubDate).toISOString() : "";
+
       if (!title || !link || !publishedAtISO) return null;
 
       return {
-        id: `${publishedAtISO}_${i}_${title.slice(0, 20)}`,
+        id: `${publishedAtISO}_${i}`,
         title,
-        url: normalizeUrl(link),
+        url: link,
         source,
         publishedAtISO,
         snippet: clamp(desc, 200),
       } as NewsItem;
     })
     .filter(Boolean) as NewsItem[];
-}
-
-async function fetchGoogleNewsMultiQuery(): Promise<NewsItem[]> {
-  // ✅ Multi-query approach for broader coverage
-  const queries: string[] = [
-    // broad sector
-    '(India (power OR electricity OR energy OR grid OR "renewable energy"))',
-    // demand / peak
-    '(India ("power demand" OR "peak demand" OR electricity demand OR load))',
-    // supply / grid
-    '(India (grid OR transmission OR discom OR "power supply" OR outage))',
-    // renewables
-    '(India (solar OR wind OR battery OR storage OR "green energy") (power OR electricity))',
-  ];
-
-  const results = await Promise.allSettled(queries.map((q) => fetchRSSQuery(q)));
-
-  // Merge successful results
-  const merged: NewsItem[] = [];
-  for (const r of results) {
-    if (r.status === "fulfilled") merged.push(...r.value);
-  }
-
-  // De-dupe by normalized URL
-  const map = new Map<string, NewsItem>();
-  for (const item of merged) {
-    const key = item.url;
-    const existing = map.get(key);
-    if (!existing) {
-      map.set(key, item);
-    } else {
-      // keep the newer timestamp if duplicates
-      if (existing.publishedAtISO < item.publishedAtISO) map.set(key, item);
-    }
-  }
-
-  return Array.from(map.values());
 }
 
 function Card({
@@ -211,7 +167,7 @@ export default function LatestNews() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // defaults: last 7 days
+  // ✅ Intelligent defaults: End=today, Start=today-7
   const [endDate, setEndDate] = useState<string>(() => todayISODate());
   const [startDate, setStartDate] = useState<string>(() => {
     const end = todayISODate();
@@ -220,6 +176,9 @@ export default function LatestNews() {
 
   const todayMax = todayISODate();
 
+  // Ensure constraints are respected if user edits endDate:
+  // - endDate cannot exceed today
+  // - startDate cannot exceed endDate
   useEffect(() => {
     if (endDate > todayMax) setEndDate(todayMax);
     if (startDate > endDate) setStartDate(endDate);
@@ -254,14 +213,10 @@ export default function LatestNews() {
         }
       }
 
-      const raw = await fetchGoogleNewsMultiQuery();
-      const relevant = raw.filter(isRelevant);
-
-      relevant.sort((a, b) => (a.publishedAtISO < b.publishedAtISO ? 1 : -1));
-      const limited = relevant.slice(0, 200);
-
-      setItems(limited);
-      saveCache(limited);
+      const raw = await fetchGoogleNewsRSS();
+      const relevant = raw.filter(isRelevant).slice(0, 100);
+      setItems(relevant);
+      saveCache(relevant);
     } catch {
       setError("Unable to load news – please try again later");
     } finally {
@@ -269,6 +224,7 @@ export default function LatestNews() {
     }
   }
 
+  // Fetch on tab load; filter applies immediately because defaults are last 7 days
   useEffect(() => {
     load(false);
   }, []);
@@ -302,6 +258,7 @@ export default function LatestNews() {
           </div>
         </div>
 
+        {/* Filter card */}
         <div className="mt-6">
           <Card
             title="Filter"
@@ -314,7 +271,10 @@ export default function LatestNews() {
                   Last 7 Days
                 </button>
                 <button
-                  onClick={setLast7DaysPreset}
+                  onClick={() => {
+                    // Keep reset but make it sensible: go back to last 7 days (per your spec)
+                    setLast7DaysPreset();
+                  }}
                   className="rounded-xl bg-white px-3 py-2 text-sm font-semibold text-slate-700 ring-1 ring-slate-200 hover:bg-slate-50"
                 >
                   Reset
@@ -329,7 +289,7 @@ export default function LatestNews() {
                   type="date"
                   value={startDate}
                   min={MIN_DATE}
-                  max={endDate}
+                  max={endDate} // ✅ Start max = End date
                   onChange={(e) => {
                     const v = e.target.value;
                     if (!v) return;
@@ -345,7 +305,7 @@ export default function LatestNews() {
                   type="date"
                   value={endDate}
                   min={MIN_DATE}
-                  max={todayMax}
+                  max={todayMax} // ✅ End max = today (no future)
                   onChange={(e) => {
                     const v = e.target.value;
                     if (!v) return;
@@ -365,8 +325,8 @@ export default function LatestNews() {
           </Card>
         </div>
 
-        {/* ✅ Show error only when nothing to display */}
-        {error && filtered.length === 0 ? (
+        {/* Error */}
+        {error ? (
           <div className="mt-6 rounded-2xl bg-rose-50 p-4 text-rose-800 ring-1 ring-rose-200">
             <div className="font-semibold">{error}</div>
             <button
@@ -378,6 +338,7 @@ export default function LatestNews() {
           </div>
         ) : null}
 
+        {/* Content */}
         <div className="mt-6">
           {loading && !items.length ? (
             <div className="text-sm text-slate-600">Loading news…</div>
