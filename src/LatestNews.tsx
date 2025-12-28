@@ -9,9 +9,8 @@ type NewsItem = {
   snippet: string;
 };
 
-const CACHE_KEY = "latestNews_cache_v3";
+const CACHE_KEY = "latestNews_cache_v4";
 const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
-
 const MIN_DATE = "2015-01-01";
 
 const POWER_TERMS = [
@@ -28,6 +27,7 @@ const POWER_TERMS = [
   "plf",
   "transmission",
   "discom",
+  "tariff",
   "energy",
 ];
 
@@ -89,16 +89,17 @@ function saveCache(items: NewsItem[]) {
   }
 }
 
-async function fetchGoogleNewsRSS(): Promise<NewsItem[]> {
+async function fetchGoogleNewsRSS(forceFresh: boolean): Promise<NewsItem[]> {
   const rss =
     "https://news.google.com/rss/search?q=" +
     encodeURIComponent(
-      "(India power sector OR India electricity OR India power demand OR India grid OR India renewable energy OR India peak demand OR India power supply OR India discom OR India transmission)"
+      "(India power sector OR India electricity OR India power demand OR India power supply OR India peak demand OR India renewable energy OR India grid OR India discom OR India transmission)"
     ) +
     "&hl=en-IN&gl=IN&ceid=IN:en";
 
-  // ✅ AllOrigins proxy (browser-safe on Vercel)
-  const proxy = `https://api.allorigins.win/raw?url=${encodeURIComponent(rss)}`;
+  // ✅ AllOrigins proxy; add cache-busting when forceFresh=true
+  const cb = forceFresh ? `&cb=${Date.now()}` : "";
+  const proxy = `https://api.allorigins.win/raw?url=${encodeURIComponent(rss)}${cb}`;
 
   const res = await fetch(proxy);
   if (!res.ok) throw new Error("RSS fetch failed");
@@ -114,12 +115,12 @@ async function fetchGoogleNewsRSS(): Promise<NewsItem[]> {
       const pubDate = item.querySelector("pubDate")?.textContent?.trim() || "";
       const source = item.querySelector("source")?.textContent?.trim() || "Google News";
 
-      const desc = (
-        item.querySelector("description")?.textContent || ""
-      ).replace(/<[^>]+>/g, "");
+      const desc = (item.querySelector("description")?.textContent || "").replace(
+        /<[^>]+>/g,
+        ""
+      );
 
       const publishedAtISO = pubDate ? new Date(pubDate).toISOString() : "";
-
       if (!title || !link || !publishedAtISO) return null;
 
       return {
@@ -167,19 +168,14 @@ export default function LatestNews() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // ✅ Intelligent defaults: End=today, Start=today-7
+  // Defaults: End=today, Start=today-7
   const [endDate, setEndDate] = useState<string>(() => todayISODate());
-  const [startDate, setStartDate] = useState<string>(() => {
-    const end = todayISODate();
-    return daysBeforeISO(end, 7);
-  });
+  const [startDate, setStartDate] = useState<string>(() => daysBeforeISO(todayISODate(), 7));
 
   const todayMax = todayISODate();
 
-  // Ensure constraints are respected if user edits endDate:
-  // - endDate cannot exceed today
-  // - startDate cannot exceed endDate
   useEffect(() => {
+    // Clamp to valid ranges
     if (endDate > todayMax) setEndDate(todayMax);
     if (startDate > endDate) setStartDate(endDate);
     if (startDate < MIN_DATE) setStartDate(MIN_DATE);
@@ -188,8 +184,9 @@ export default function LatestNews() {
   }, [endDate]);
 
   const filtered = useMemo(() => {
-    const fromT = new Date(startDate + "T00:00:00Z").getTime();
-    const toT = new Date(endDate + "T23:59:59Z").getTime();
+    // ✅ Use LOCAL day boundaries (no "Z") to match what users expect on the UI calendar
+    const fromT = new Date(startDate + "T00:00:00").getTime();
+    const toT = new Date(endDate + "T23:59:59").getTime();
 
     return items
       .filter((n) => {
@@ -213,18 +210,19 @@ export default function LatestNews() {
         }
       }
 
-      const raw = await fetchGoogleNewsRSS();
+      const raw = await fetchGoogleNewsRSS(force);
       const relevant = raw.filter(isRelevant).slice(0, 100);
+
       setItems(relevant);
       saveCache(relevant);
     } catch {
+      // Only set error; UI will display it only when no data (see below)
       setError("Unable to load news – please try again later");
     } finally {
       setLoading(false);
     }
   }
 
-  // Fetch on tab load; filter applies immediately because defaults are last 7 days
   useEffect(() => {
     load(false);
   }, []);
@@ -258,7 +256,6 @@ export default function LatestNews() {
           </div>
         </div>
 
-        {/* Filter card */}
         <div className="mt-6">
           <Card
             title="Filter"
@@ -271,10 +268,7 @@ export default function LatestNews() {
                   Last 7 Days
                 </button>
                 <button
-                  onClick={() => {
-                    // Keep reset but make it sensible: go back to last 7 days (per your spec)
-                    setLast7DaysPreset();
-                  }}
+                  onClick={setLast7DaysPreset}
                   className="rounded-xl bg-white px-3 py-2 text-sm font-semibold text-slate-700 ring-1 ring-slate-200 hover:bg-slate-50"
                 >
                   Reset
@@ -289,7 +283,7 @@ export default function LatestNews() {
                   type="date"
                   value={startDate}
                   min={MIN_DATE}
-                  max={endDate} // ✅ Start max = End date
+                  max={endDate}
                   onChange={(e) => {
                     const v = e.target.value;
                     if (!v) return;
@@ -305,7 +299,7 @@ export default function LatestNews() {
                   type="date"
                   value={endDate}
                   min={MIN_DATE}
-                  max={todayMax} // ✅ End max = today (no future)
+                  max={todayMax}
                   onChange={(e) => {
                     const v = e.target.value;
                     if (!v) return;
@@ -325,8 +319,8 @@ export default function LatestNews() {
           </Card>
         </div>
 
-        {/* Error */}
-        {error ? (
+        {/* ✅ show error only if we have nothing to display */}
+        {error && filtered.length === 0 ? (
           <div className="mt-6 rounded-2xl bg-rose-50 p-4 text-rose-800 ring-1 ring-rose-200">
             <div className="font-semibold">{error}</div>
             <button
@@ -338,7 +332,6 @@ export default function LatestNews() {
           </div>
         ) : null}
 
-        {/* Content */}
         <div className="mt-6">
           {loading && !items.length ? (
             <div className="text-sm text-slate-600">Loading news…</div>
