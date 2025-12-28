@@ -9,9 +9,8 @@ type NewsItem = {
   snippet: string;
 };
 
-const CACHE_KEY = "latestReports_cache_v2";
+const CACHE_KEY = "latestReports_cache_v3";
 const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
-
 const MIN_DATE = "2015-01-01";
 
 const POWER_TERMS = [
@@ -49,24 +48,6 @@ const REPORT_TERMS = [
   "downgrade",
 ];
 
-const COMPANY_FILTERS: { label: string; patterns: string[] }[] = [
-  { label: "All", patterns: [] },
-  { label: "NTPC", patterns: ["ntpc"] },
-  { label: "Tata Power", patterns: ["tata power", "tatapower"] },
-  { label: "Power Grid", patterns: ["power grid", "powergrid", "pgcil", "pgi l", "pgcil"] },
-  { label: "Adani Power", patterns: ["adani power", "adanipower"] },
-  { label: "Adani Green", patterns: ["adani green", "adani renew", "adanigreen"] },
-  { label: "REC", patterns: ["rec", "rural electrification corporation"] },
-  { label: "PFC", patterns: ["pfc", "power finance corporation"] },
-  { label: "NHPC", patterns: ["nhpc"] },
-  { label: "JSW Energy", patterns: ["jsw energy", "jswenergy"] },
-  { label: "Torrent Power", patterns: ["torrent power", "torrentpower"] },
-  { label: "SJVN", patterns: ["sjvn"] },
-  { label: "NLC India", patterns: ["nlc india", "nlc"] },
-  { label: "CESC", patterns: ["cesc"] },
-  { label: "IREDA", patterns: ["ireda"] },
-];
-
 const BROKER_TERMS = [
   "icici securities",
   "motilal oswal",
@@ -90,6 +71,24 @@ const BROKER_TERMS = [
   "yes securities",
   "emkay",
   "dam capital",
+];
+
+const COMPANY_FILTERS: { label: string; patterns: string[] }[] = [
+  { label: "All", patterns: [] },
+  { label: "NTPC", patterns: ["ntpc"] },
+  { label: "Tata Power", patterns: ["tata power", "tatapower"] },
+  { label: "Power Grid", patterns: ["power grid", "powergrid", "pgcil"] },
+  { label: "Adani Power", patterns: ["adani power", "adanipower"] },
+  { label: "Adani Green", patterns: ["adani green", "adanigreen", "adani renew"] },
+  { label: "REC", patterns: ["rec", "rural electrification corporation"] },
+  { label: "PFC", patterns: ["pfc", "power finance corporation"] },
+  { label: "NHPC", patterns: ["nhpc"] },
+  { label: "JSW Energy", patterns: ["jsw energy", "jswenergy"] },
+  { label: "Torrent Power", patterns: ["torrent power", "torrentpower"] },
+  { label: "SJVN", patterns: ["sjvn"] },
+  { label: "NLC India", patterns: ["nlc india", "nlc"] },
+  { label: "CESC", patterns: ["cesc"] },
+  { label: "IREDA", patterns: ["ireda"] },
 ];
 
 function isoDate(d: Date) {
@@ -128,7 +127,6 @@ function isRelevantReport(item: NewsItem) {
   const mentionsReport =
     REPORT_TERMS.some((t) => hay.includes(t)) ||
     BROKER_TERMS.some((t) => hay.includes(t));
-
   return mentionsIndia && mentionsPower && mentionsReport;
 }
 
@@ -154,7 +152,7 @@ function saveCache(items: NewsItem[]) {
   }
 }
 
-async function fetchGoogleNewsRSS(): Promise<NewsItem[]> {
+async function fetchGoogleNewsRSS(forceFresh: boolean): Promise<NewsItem[]> {
   // Query tuned to brokerage research and analyst reports on Indian power names
   const q = `(India (power OR electricity OR energy OR renewable OR grid) (report OR research OR initiation OR coverage OR analyst OR "target price" OR rating OR upgrade OR downgrade OR "buy" OR "sell" OR "hold") (NTPC OR "Tata Power" OR "Power Grid" OR "Adani Power" OR REC OR PFC OR NHPC OR "JSW Energy"))`;
 
@@ -163,8 +161,9 @@ async function fetchGoogleNewsRSS(): Promise<NewsItem[]> {
     encodeURIComponent(q) +
     "&hl=en-IN&gl=IN&ceid=IN:en";
 
-  // ✅ AllOrigins proxy (browser-safe on Vercel)
-  const proxy = `https://api.allorigins.win/raw?url=${encodeURIComponent(rss)}`;
+  // ✅ AllOrigins proxy + cache-busting when forceFresh=true
+  const cb = forceFresh ? `&cb=${Date.now()}` : "";
+  const proxy = `https://api.allorigins.win/raw?url=${encodeURIComponent(rss)}${cb}`;
 
   const res = await fetch(proxy);
   if (!res.ok) throw new Error("RSS fetch failed");
@@ -234,17 +233,15 @@ export default function LatestReports() {
 
   // Defaults: End=today, Start=today-7
   const [endDate, setEndDate] = useState<string>(() => todayISODate());
-  const [startDate, setStartDate] = useState<string>(() => {
-    const end = todayISODate();
-    return daysBeforeISO(end, 7);
-  });
+  const [startDate, setStartDate] = useState<string>(() => daysBeforeISO(todayISODate(), 7));
 
-  // ✅ NEW: Company filter (dropdown)
+  // Company filter
   const [company, setCompany] = useState<string>("All");
 
   const todayMax = todayISODate();
 
   useEffect(() => {
+    // Clamp to valid ranges
     if (endDate > todayMax) setEndDate(todayMax);
     if (startDate > endDate) setStartDate(endDate);
     if (startDate < MIN_DATE) setStartDate(MIN_DATE);
@@ -253,10 +250,12 @@ export default function LatestReports() {
   }, [endDate]);
 
   const filtered = useMemo(() => {
-    const fromT = new Date(startDate + "T00:00:00Z").getTime();
-    const toT = new Date(endDate + "T23:59:59Z").getTime();
+    // ✅ Use LOCAL day boundaries (no "Z") to match what the date picker shows to the user
+    const fromT = new Date(startDate + "T00:00:00").getTime();
+    const toT = new Date(endDate + "T23:59:59").getTime();
 
-    const chosen = COMPANY_FILTERS.find((c) => c.label === company) || COMPANY_FILTERS[0];
+    const chosen =
+      COMPANY_FILTERS.find((c) => c.label === company) || COMPANY_FILTERS[0];
     const patterns = chosen.patterns.map((p) => p.toLowerCase());
 
     return items
@@ -264,7 +263,7 @@ export default function LatestReports() {
         const t = new Date(n.publishedAtISO).getTime();
         if (!Number.isFinite(t) || t < fromT || t > toT) return false;
 
-        if (patterns.length === 0) return true; // "All"
+        if (patterns.length === 0) return true;
 
         const hay = `${n.title} ${n.snippet} ${n.source}`.toLowerCase();
         return patterns.some((p) => hay.includes(p));
@@ -286,7 +285,7 @@ export default function LatestReports() {
         }
       }
 
-      const raw = await fetchGoogleNewsRSS();
+      const raw = await fetchGoogleNewsRSS(force);
       const relevant = raw.filter(isRelevantReport).slice(0, 100);
 
       setItems(relevant);
@@ -354,7 +353,6 @@ export default function LatestReports() {
               </div>
             }
           >
-            {/* ✅ Same grid structure; we extend from 3 to 4 columns on larger screens */}
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-4 sm:items-end">
               <div>
                 <div className="text-xs font-medium text-slate-600">Start date</div>
@@ -389,7 +387,6 @@ export default function LatestReports() {
                 />
               </div>
 
-              {/* ✅ NEW: Company dropdown */}
               <div>
                 <div className="text-xs font-medium text-slate-600">Company</div>
                 <select
@@ -414,7 +411,8 @@ export default function LatestReports() {
           </Card>
         </div>
 
-        {error ? (
+        {/* ✅ show error only if nothing is displayed */}
+        {error && filtered.length === 0 ? (
           <div className="mt-6 rounded-2xl bg-rose-50 p-4 text-rose-800 ring-1 ring-rose-200">
             <div className="font-semibold">{error}</div>
             <button
