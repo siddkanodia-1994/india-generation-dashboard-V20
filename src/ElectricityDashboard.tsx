@@ -28,40 +28,116 @@ function parseISOKey(s: string) {
   return Number.isNaN(d.getTime()) ? null : s;
 }
 
-// Parse DD/MM/YYYY -> ISO; also accept DD-MM-YYYY and ISO.
+// ✅ Universal date parser
+// Accepts ALL formats:
+// DD/MM/YYYY, DD/MM/YY, MM/YYYY, MM/YY,
+// DD-MM-YYYY, DD-MM-YY,
+// ISO YYYY-MM-DD
+//
+// Month-only formats are normalized to FIRST DAY of month (YYYY-MM-01).
 function parseInputDate(s: unknown) {
   if (typeof s !== "string") return null;
   const t = s.trim();
 
-  // ✅ preferred: dd/mm/yyyy
-  if (/^\d{2}\/\d{2}\/\d{4}$/.test(t)) {
-    const [dd, mm, yyyy] = t.split("/").map(Number);
+  let m: RegExpMatchArray | null;
+
+  // DD/MM/YYYY
+  m = t.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (m) {
+    const dd = Number(m[1]);
+    const mm = Number(m[2]);
+    const yyyy = Number(m[3]);
     const d = new Date(Date.UTC(yyyy, mm - 1, dd));
-    if (Number.isNaN(d.getTime())) return null;
     if (
-      d.getUTCFullYear() !== yyyy ||
-      d.getUTCMonth() !== mm - 1 ||
-      d.getUTCDate() !== dd
-    )
-      return null;
-    return `${yyyy}-${String(mm).padStart(2, "0")}-${String(dd).padStart(2, "0")}`;
+      !Number.isNaN(d.getTime()) &&
+      d.getUTCFullYear() === yyyy &&
+      d.getUTCMonth() === mm - 1 &&
+      d.getUTCDate() === dd
+    ) {
+      return `${yyyy}-${String(mm).padStart(2, "0")}-${String(dd).padStart(2, "0")}`;
+    }
+    return null;
   }
 
-  // Back-compat: dd-mm-yyyy
-  if (/^\d{2}-\d{2}-\d{4}$/.test(t)) {
-    const [dd, mm, yyyy] = t.split("-").map(Number);
+  // DD/MM/YY -> 20YY
+  m = t.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2})$/);
+  if (m) {
+    const dd = Number(m[1]);
+    const mm = Number(m[2]);
+    const yyyy = 2000 + Number(m[3]);
     const d = new Date(Date.UTC(yyyy, mm - 1, dd));
-    if (Number.isNaN(d.getTime())) return null;
     if (
-      d.getUTCFullYear() !== yyyy ||
-      d.getUTCMonth() !== mm - 1 ||
-      d.getUTCDate() !== dd
-    )
-      return null;
-    return `${yyyy}-${String(mm).padStart(2, "0")}-${String(dd).padStart(2, "0")}`;
+      !Number.isNaN(d.getTime()) &&
+      d.getUTCFullYear() === yyyy &&
+      d.getUTCMonth() === mm - 1 &&
+      d.getUTCDate() === dd
+    ) {
+      return `${yyyy}-${String(mm).padStart(2, "0")}-${String(dd).padStart(2, "0")}`;
+    }
+    return null;
   }
 
+  // MM/YYYY -> YYYY-MM-01
+  m = t.match(/^(\d{1,2})\/(\d{4})$/);
+  if (m) {
+    const mm = Number(m[1]);
+    const yyyy = Number(m[2]);
+    if (Number.isFinite(mm) && mm >= 1 && mm <= 12 && Number.isFinite(yyyy) && yyyy >= 1900) {
+      return `${yyyy}-${String(mm).padStart(2, "0")}-01`;
+    }
+    return null;
+  }
+
+  // MM/YY -> 20YY-MM-01
+  m = t.match(/^(\d{1,2})\/(\d{2})$/);
+  if (m) {
+    const mm = Number(m[1]);
+    const yyyy = 2000 + Number(m[2]);
+    if (Number.isFinite(mm) && mm >= 1 && mm <= 12) {
+      return `${yyyy}-${String(mm).padStart(2, "0")}-01`;
+    }
+    return null;
+  }
+
+  // DD-MM-YYYY
+  m = t.match(/^(\d{1,2})-(\d{1,2})-(\d{4})$/);
+  if (m) {
+    const dd = Number(m[1]);
+    const mm = Number(m[2]);
+    const yyyy = Number(m[3]);
+    const d = new Date(Date.UTC(yyyy, mm - 1, dd));
+    if (
+      !Number.isNaN(d.getTime()) &&
+      d.getUTCFullYear() === yyyy &&
+      d.getUTCMonth() === mm - 1 &&
+      d.getUTCDate() === dd
+    ) {
+      return `${yyyy}-${String(mm).padStart(2, "0")}-${String(dd).padStart(2, "0")}`;
+    }
+    return null;
+  }
+
+  // DD-MM-YY -> 20YY
+  m = t.match(/^(\d{1,2})-(\d{1,2})-(\d{2})$/);
+  if (m) {
+    const dd = Number(m[1]);
+    const mm = Number(m[2]);
+    const yyyy = 2000 + Number(m[3]);
+    const d = new Date(Date.UTC(yyyy, mm - 1, dd));
+    if (
+      !Number.isNaN(d.getTime()) &&
+      d.getUTCFullYear() === yyyy &&
+      d.getUTCMonth() === mm - 1 &&
+      d.getUTCDate() === dd
+    ) {
+      return `${yyyy}-${String(mm).padStart(2, "0")}-${String(dd).padStart(2, "0")}`;
+    }
+    return null;
+  }
+
+  // ISO
   if (/^\d{4}-\d{2}-\d{2}$/.test(t)) return parseISOKey(t);
+
   return null;
 }
 
