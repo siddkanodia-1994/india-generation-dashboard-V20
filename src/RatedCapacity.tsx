@@ -20,7 +20,7 @@ import {
  * - Uses localStorage keys:
  *    - ratedCapacity_installed
  *    - ratedCapacity_plf
- * - Reads initial installed capacities from /data/Capacity.csv (single-row CSV)
+ * - Reads initial installed capacities from /data/capacity.csv (single-row CSV)
  * - Reads historical monthly capacities from /data/capacity.csv (or /data/Capacity.csv fallback)
  */
 
