@@ -20,7 +20,8 @@ import {
  * - Uses localStorage keys:
  *    - ratedCapacity_installed
  *    - ratedCapacity_plf
- * - Reads initial installed capacities from /data/capacity.csv (single-row CSV)
+ * - Reads initial installed capacities from /data/capacity.csv (latest row in monthly CSV)
+ *   (and /data/Capacity.csv fallback if it exists)
  * - Reads historical monthly capacities from /data/capacity.csv (or /data/Capacity.csv fallback)
  */
 
@@ -282,7 +283,6 @@ function inputValueToMonthKey(v: string) {
 
 /* =========================================================
    Capacity Card (NEW) — RTM-like chart + toggles
-   Pulls monthly totals from the SAME capacity.csv data already loaded
 ========================================================= */
 
 function isoMinusDays(iso: string, days: number) {
@@ -367,17 +367,14 @@ function CapacityCard({
   const [fromIso, setFromIso] = useState("");
   const [toIso, setToIso] = useState("");
 
-  // mimic RTM card: view selector exists (we keep Monthly only, but UI matches)
   const [viewAs, setViewAs] = useState<"monthly">("monthly");
 
-  // RTM-like series toggles (defaults: totals ON, control lines ON; YoY% OFF)
   const [showUnitsSeries, setShowUnitsSeries] = useState<boolean>(true);
   const [showPrevYearSeries, setShowPrevYearSeries] = useState<boolean>(false);
   const [showYoYSeries, setShowYoYSeries] = useState<boolean>(false);
   const [showMoMSeries, setShowMoMSeries] = useState<boolean>(false);
   const [showControlLines, setShowControlLines] = useState<boolean>(true);
 
-  // Build monthly total series from history (same file capacity.csv)
   const series = useMemo(() => {
     const rows = (history || [])
       .map((r) => {
@@ -391,7 +388,6 @@ function CapacityCard({
 
     const lookup = new Map(rows.map((r) => [r.iso, r.total] as const));
 
-    // helper to get previous month iso (YYYY-MM-01)
     const prevMonthISO = (iso: string) => {
       const y = Number(iso.slice(0, 4));
       const m = Number(iso.slice(5, 7));
@@ -426,7 +422,6 @@ function CapacityCard({
 
   const hasData = hasHistory && series.length > 0;
 
-  // default from/to based on range
   useEffect(() => {
     if (!hasData) return;
     const lastIso = series[series.length - 1].iso;
@@ -451,7 +446,8 @@ function CapacityCard({
 
     const values: number[] = [];
     if (showUnitsSeries) for (const p of filtered) values.push(p.units);
-    else if (showPrevYearSeries) for (const p of filtered) if (p.prev_year_units != null) values.push(p.prev_year_units);
+    else if (showPrevYearSeries)
+      for (const p of filtered) if (p.prev_year_units != null) values.push(p.prev_year_units);
 
     if (values.length < 2) return null;
     const mean = values.reduce((a, b) => a + b, 0) / values.length;
@@ -523,19 +519,6 @@ function CapacityCard({
     }
     return computeDomain(vals, 0.05, 1);
   }, [chartData, showYoYSeries, showMoMSeries, showControlLines]);
-
-  const fmtValue = (x: number | null | undefined) => {
-    const n = asFiniteNumber(x);
-    if (n == null) return "—";
-    return new Intl.NumberFormat("en-IN", { maximumFractionDigits: 2 }).format(Number(n.toFixed(2)));
-  };
-
-  const fmtPct = (x: number | null | undefined) => {
-    const n = asFiniteNumber(x);
-    if (n == null) return "—";
-    const sign = n > 0 ? "+" : "";
-    return `${sign}${Number(n.toFixed(2)).toFixed(2)}%`;
-  };
 
   return (
     <div className="mt-6 grid grid-cols-1 gap-4">
@@ -760,7 +743,9 @@ function CapacityCard({
                       const fmtValue = (x: number | null | undefined) => {
                         const n = asFiniteNumber(x);
                         if (n == null) return "—";
-                        return new Intl.NumberFormat("en-IN", { maximumFractionDigits: 2 }).format(Number(n.toFixed(2)));
+                        return new Intl.NumberFormat("en-IN", { maximumFractionDigits: 2 }).format(
+                          Number(n.toFixed(2))
+                        );
                       };
 
                       const fmtPct = (x: number | null | undefined) => {
@@ -847,21 +832,118 @@ function CapacityCard({
 
                   {showControlLines && controlStatsLeft ? (
                     <>
-                      <Line yAxisId="left" type="monotone" dataKey="__mean_units" name="Mean" dot={false} strokeWidth={2} stroke="#000000" connectNulls />
-                      <Line yAxisId="left" type="monotone" dataKey="__p1_units" name="+1σ" dot={false} strokeWidth={2} stroke="#2563eb" strokeDasharray="6 4" connectNulls />
-                      <Line yAxisId="left" type="monotone" dataKey="__p2_units" name="+2σ" dot={false} strokeWidth={2} stroke="#4f46e5" strokeDasharray="6 4" connectNulls />
-                      <Line yAxisId="left" type="monotone" dataKey="__m1_units" name="-1σ" dot={false} strokeWidth={2} stroke="#f97316" strokeDasharray="6 4" connectNulls />
-                      <Line yAxisId="left" type="monotone" dataKey="__m2_units" name="-2σ" dot={false} strokeWidth={2} stroke="#eab308" strokeDasharray="6 4" connectNulls />
+                      <Line
+                        yAxisId="left"
+                        type="monotone"
+                        dataKey="__mean_units"
+                        name="Mean"
+                        dot={false}
+                        strokeWidth={2}
+                        stroke="#000000"
+                        connectNulls
+                      />
+                      <Line
+                        yAxisId="left"
+                        type="monotone"
+                        dataKey="__p1_units"
+                        name="+1σ"
+                        dot={false}
+                        strokeWidth={2}
+                        stroke="#2563eb"
+                        strokeDasharray="6 4"
+                        connectNulls
+                      />
+                      <Line
+                        yAxisId="left"
+                        type="monotone"
+                        dataKey="__p2_units"
+                        name="+2σ"
+                        dot={false}
+                        strokeWidth={2}
+                        stroke="#4f46e5"
+                        strokeDasharray="6 4"
+                        connectNulls
+                      />
+                      <Line
+                        yAxisId="left"
+                        type="monotone"
+                        dataKey="__m1_units"
+                        name="-1σ"
+                        dot={false}
+                        strokeWidth={2}
+                        stroke="#f97316"
+                        strokeDasharray="6 4"
+                        connectNulls
+                      />
+                      <Line
+                        yAxisId="left"
+                        type="monotone"
+                        dataKey="__m2_units"
+                        name="-2σ"
+                        dot={false}
+                        strokeWidth={2}
+                        stroke="#eab308"
+                        strokeDasharray="6 4"
+                        connectNulls
+                      />
                     </>
                   ) : null}
 
                   {showControlLines && controlStatsYoY ? (
                     <>
-                      <Line yAxisId="right" type="monotone" dataKey="__mean_yoy" name="Mean (YoY%)" dot={false} strokeWidth={2} stroke="#000000" connectNulls />
-                      <Line yAxisId="right" type="monotone" dataKey="__p1_yoy" name="+1σ (YoY%)" dot={false} strokeWidth={2} stroke="#2563eb" strokeDasharray="6 4" connectNulls />
-                      <Line yAxisId="right" type="monotone" dataKey="__p2_yoy" name="+2σ (YoY%)" dot={false} strokeWidth={2} stroke="#4f46e5" strokeDasharray="6 4" connectNulls />
-                      <Line yAxisId="right" type="monotone" dataKey="__m1_yoy" name="-1σ (YoY%)" dot={false} strokeWidth={2} stroke="#f97316" strokeDasharray="6 4" connectNulls />
-                      <Line yAxisId="right" type="monotone" dataKey="__m2_yoy" name="-2σ (YoY%)" dot={false} strokeWidth={2} stroke="#eab308" connectNulls />
+                      <Line
+                        yAxisId="right"
+                        type="monotone"
+                        dataKey="__mean_yoy"
+                        name="Mean (YoY%)"
+                        dot={false}
+                        strokeWidth={2}
+                        stroke="#000000"
+                        connectNulls
+                      />
+                      <Line
+                        yAxisId="right"
+                        type="monotone"
+                        dataKey="__p1_yoy"
+                        name="+1σ (YoY%)"
+                        dot={false}
+                        strokeWidth={2}
+                        stroke="#2563eb"
+                        strokeDasharray="6 4"
+                        connectNulls
+                      />
+                      <Line
+                        yAxisId="right"
+                        type="monotone"
+                        dataKey="__p2_yoy"
+                        name="+2σ (YoY%)"
+                        dot={false}
+                        strokeWidth={2}
+                        stroke="#4f46e5"
+                        strokeDasharray="6 4"
+                        connectNulls
+                      />
+                      <Line
+                        yAxisId="right"
+                        type="monotone"
+                        dataKey="__m1_yoy"
+                        name="-1σ (YoY%)"
+                        dot={false}
+                        strokeWidth={2}
+                        stroke="#f97316"
+                        strokeDasharray="6 4"
+                        connectNulls
+                      />
+                      <Line
+                        yAxisId="right"
+                        type="monotone"
+                        dataKey="__m2_yoy"
+                        name="-2σ (YoY%)"
+                        dot={false}
+                        strokeWidth={2}
+                        stroke="#eab308"
+                        connectNulls
+                      />
                     </>
                   ) : null}
                 </LineChart>
@@ -912,27 +994,53 @@ export default function RatedCapacity() {
   const [capacityCsvMissing, setCapacityCsvMissing] = useState(false);
   const [capacityCsvMsg, setCapacityCsvMsg] = useState<string | null>(null);
 
+  // ✅ FIX: Load installed capacities from the latest row in /data/capacity.csv (one-file setup)
   useEffect(() => {
     let cancelled = false;
 
-    async function loadCapacitySingleRow() {
+    async function loadInstalledFromLatestRow() {
       try {
-        const res = await fetch(`/data/Capacity.csv?v=${Date.now()}`);
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const text = await res.text();
+        const { text } = await fetchTextWithFallback([
+          "/data/capacity.csv",
+          "/data/Capacity.csv", // fallback if repo ever has it
+        ]);
+
         const { header, rows } = parseCSVSimple(text);
         if (!header.length || !rows.length) throw new Error("Empty CSV");
 
-        const row = rows[0] || [];
-        const map: Record<string, string> = {};
-        header.forEach((h, i) => {
-          map[h] = row[i] ?? "";
-        });
+        const normHeaders = header.map(normalizeHeader);
+
+        // Detect month/date column (same detection as historical)
+        const monthIdx = normHeaders.findIndex(
+          (h) => h === "month" || h === "date" || h === "capacity (gw)" || h === "capacity(gw)"
+        );
+        if (monthIdx === -1) throw new Error("Missing Month/Date column");
+
+        // Build source column indices by normalized header
+        const sourceIdx: Record<SourceKey, number> = {} as any;
+        for (const s of SOURCES) {
+          const want = normalizeHeader(s);
+          sourceIdx[s] = normHeaders.findIndex((h) => h === want);
+        }
+
+        // Find the latest valid month row (normalizeMonth supports DD/MM/YYYY etc.)
+        const candidates: Array<{ mk: string; row: string[] }> = [];
+        for (const r of rows) {
+          const mk = normalizeMonth(r[monthIdx] ?? "");
+          if (!mk) continue;
+          candidates.push({ mk, row: r });
+        }
+        if (!candidates.length) throw new Error("No valid date/month rows");
+
+        candidates.sort((a, b) => compareMonthKey(a.mk, b.mk));
+        const latest = candidates[candidates.length - 1].row;
 
         const next = { ...installed };
         let any = false;
+
         for (const s of SOURCES) {
-          const v = safeNum(map[s]);
+          const idx = sourceIdx[s];
+          const v = idx >= 0 ? safeNum(latest[idx]) : 0;
           if (Number.isFinite(v)) {
             next[s] = v;
             any = true;
@@ -947,13 +1055,14 @@ export default function RatedCapacity() {
       } catch {
         if (!cancelled) {
           setCapacityCsvMissing(true);
-          setCapacityCsvMsg("Capacity.csv not loaded – enter values manually.");
+          setCapacityCsvMsg("capacity.csv not loaded – enter values manually.");
         }
       }
     }
 
+    // Preserve existing behavior: if user already has non-zero local values, don't override
     const hasNonZeroLocal = Object.values(installed).some((v) => Number(v) !== 0);
-    if (!hasNonZeroLocal) loadCapacitySingleRow();
+    if (!hasNonZeroLocal) loadInstalledFromLatestRow();
 
     return () => {
       cancelled = true;
@@ -1025,7 +1134,10 @@ export default function RatedCapacity() {
       try {
         setHistoryError(null);
 
-        const { path, text } = await fetchTextWithFallback(["/data/capacity.csv", "/data/Capacity.csv"]);
+        const { path, text } = await fetchTextWithFallback([
+          "/data/capacity.csv",
+          "/data/Capacity.csv",
+        ]);
 
         const { header, rows } = parseCSVSimple(text);
         if (!header.length || !rows.length) throw new Error("Empty CSV");
@@ -1075,7 +1187,9 @@ export default function RatedCapacity() {
         if (!cancelled) {
           setHistory([]);
           setHistoryLoadedFrom(null);
-          setHistoryError("capacity.csv not loaded – ensure /public/data/capacity.csv exists with Month/Date + source columns.");
+          setHistoryError(
+            "capacity.csv not loaded – ensure /public/data/capacity.csv exists with Month/Date + source columns."
+          );
         }
       }
     }
@@ -1090,7 +1204,10 @@ export default function RatedCapacity() {
     if (!monthOptions.length) return;
 
     const end = latestMonth || monthOptions[monthOptions.length - 1];
-    const start = defaultStartMonth || monthOptions[Math.max(0, monthOptions.length - 13)] || monthOptions[0];
+    const start =
+      defaultStartMonth ||
+      monthOptions[Math.max(0, monthOptions.length - 13)] ||
+      monthOptions[0];
 
     setEndMonth((prev) => (prev ? clampMonthKeyToOptions(prev, monthOptions) : end));
     setStartMonth((prev) => (prev ? clampMonthKeyToOptions(prev, monthOptions) : start));
@@ -1354,7 +1471,9 @@ export default function RatedCapacity() {
 
                 <tbody>
                   <tr className="border-t border-slate-100">
-                    <td className="px-2 py-2 font-bold text-slate-900">Capacity as on Start Date ({startMonth || "—"})</td>
+                    <td className="px-2 py-2 font-bold text-slate-900">
+                      Capacity as on Start Date ({startMonth || "—"})
+                    </td>
                     {SOURCES.map((s) => (
                       <td key={s} className="px-2 py-2 text-right tabular-nums text-slate-900">
                         {startTotals ? fmt2(startTotals.per[s]) : "—"}
@@ -1366,7 +1485,9 @@ export default function RatedCapacity() {
                   </tr>
 
                   <tr className="border-t border-slate-100">
-                    <td className="px-2 py-2 font-bold text-slate-900">Capacity as on End Date ({endMonth || "—"})</td>
+                    <td className="px-2 py-2 font-bold text-slate-900">
+                      Capacity as on End Date ({endMonth || "—"})
+                    </td>
                     {SOURCES.map((s) => (
                       <td key={s} className="px-2 py-2 text-right tabular-nums text-slate-900">
                         {endTotals ? fmt2(endTotals.per[s]) : "—"}
@@ -1394,11 +1515,13 @@ export default function RatedCapacity() {
                         startTotals && endTotals ? netColorClass(netAdditions.total) : "text-slate-700"
                       }`}
                     >
-                      {startTotals && endTotals ? `${netAdditions.total > 0 ? "+" : ""}${fmt2(netAdditions.total)}` : "—"}
+                      {startTotals && endTotals
+                        ? `${netAdditions.total > 0 ? "+" : ""}${fmt2(netAdditions.total)}`
+                        : "—"}
                     </td>
                   </tr>
 
-                  {/* ✅ ADDED: PLF % (editable, persisted) */}
+                  {/* ✅ PLF % (editable, persisted) */}
                   <tr className="border-t border-slate-100">
                     <td className="px-2 py-2 font-bold text-slate-900">PLF %</td>
                     {SOURCES.map((s) => (
@@ -1420,7 +1543,7 @@ export default function RatedCapacity() {
                     <td className="px-2 py-2 text-right font-semibold tabular-nums text-slate-500">—</td>
                   </tr>
 
-                  {/* ✅ ADDED: Rated Net Additions (read-only) */}
+                  {/* ✅ Rated Net Additions (read-only) */}
                   <tr className="border-t border-slate-100">
                     <td className="px-2 py-2 font-bold text-slate-900">Rated Net Addition (GW)</td>
                     {SOURCES.map((s) => (
@@ -1440,7 +1563,6 @@ export default function RatedCapacity() {
               Net Addition (GW) = Capacity at End Date − Capacity at Start Date. Data sourced from monthly capacity.csv.
             </div>
 
-            {/* ✅ REQUESTED FOOTER NOTE */}
             <div className="mt-1 text-xs text-slate-600">
               Rated Net Addition (GW) = Net Addition × (PLF / 100). PLF % values are editable and saved locally in your browser.
             </div>
